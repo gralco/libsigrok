@@ -265,6 +265,10 @@ static struct sr_dev_inst *probe_device(struct sr_scpi_dev_inst *scpi)
 	const struct siglent_sds_model *model;
 	gchar *channel_name;
 
+	sr_dbg("Setting Communication Headers to off.");
+	if (sr_scpi_send(scpi, "CHDR OFF") != SR_OK)
+		return NULL;
+
 	if (sr_scpi_get_hw_id(scpi, &hw_info) != SR_OK) {
 		sr_info("Couldn't get IDN response, retrying.");
 		sr_scpi_close(scpi);
@@ -288,10 +292,6 @@ static struct sr_dev_inst *probe_device(struct sr_scpi_dev_inst *scpi)
 		return NULL;
 	}
 
-	sr_dbg("Setting Communication Headers to off.");
-	if (sr_scpi_send(scpi, "CHDR OFF") != SR_OK)
-		return NULL;
-
 	sdi = g_malloc0(sizeof(struct sr_dev_inst));
 	sdi->vendor = g_strdup(model->series->vendor->name);
 	sdi->model = g_strdup(model->name);
@@ -313,13 +313,17 @@ static struct sr_dev_inst *probe_device(struct sr_scpi_dev_inst *scpi)
 		channel_name = g_strdup_printf("CH%d", i + 1);
 		ch = sr_channel_new(sdi, i, SR_CHANNEL_ANALOG, TRUE, channel_name);
 
-		devc->analog_groups[i] = sr_channel_group_new(sdi,
-			channel_name, NULL);
+		devc->analog_groups[i] = g_malloc0(sizeof(struct sr_channel_group));
+
+		devc->analog_groups[i]->name = channel_name;
 		devc->analog_groups[i]->channels = g_slist_append(NULL, ch);
+		sdi->channel_groups = g_slist_append(sdi->channel_groups,
+			devc->analog_groups[i]);
 	}
 
 	if (devc->model->has_digital) {
-		devc->digital_group = sr_channel_group_new(sdi, "LA", NULL);
+		devc->digital_group = g_malloc0(sizeof(struct sr_channel_group));
+
 		for (i = 0; i < ARRAY_SIZE(devc->digital_channels); i++) {
 			channel_name = g_strdup_printf("D%d", i);
 			ch = sr_channel_new(sdi, i, SR_CHANNEL_LOGIC, TRUE, channel_name);
@@ -327,6 +331,9 @@ static struct sr_dev_inst *probe_device(struct sr_scpi_dev_inst *scpi)
 			devc->digital_group->channels = g_slist_append(
 				devc->digital_group->channels, ch);
 		}
+		devc->digital_group->name = g_strdup("LA");
+		sdi->channel_groups = g_slist_append(sdi->channel_groups,
+			devc->digital_group);
 	}
 
 	for (i = 0; i < ARRAY_SIZE(timebases); i++) {
@@ -830,6 +837,7 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 	struct sr_scpi_dev_inst *scpi;
 	struct dev_context *devc;
 	struct sr_channel *ch;
+	struct sr_datafeed_packet packet;
 	gboolean some_digital;
 	GSList *l, *d;
 
@@ -932,7 +940,8 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 		return SR_ERR;
 
 	/* Start of first frame. */
-	std_session_send_df_frame_begin(sdi);
+	packet.type = SR_DF_FRAME_BEGIN;
+	sr_session_send(sdi, &packet);
 
 	return SR_OK;
 }
